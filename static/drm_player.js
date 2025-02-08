@@ -1,93 +1,105 @@
-document.addEventListener('DOMContentLoaded', () => {
-    const video = document.getElementById('video');
-    const player = new shaka.Player(video);
+const darkModeToggle = document.getElementById('darkModeToggle');
+const htmlElement = document.documentElement;
+if (localStorage.getItem('darkMode') === 'true') {
+    htmlElement.classList.add('dark');
+}
+darkModeToggle.addEventListener('click', () => {
+    htmlElement.classList.toggle('dark');
+    localStorage.setItem('darkMode', htmlElement.classList.contains('dark'));
+});
 
-    // Play button functionality
-    window.playVideo = function () {
-        video.play();
-    };
+function onPlayerErrorEvent(errorEvent) {
+    onPlayerError(errorEvent.detail);
+}
+function onPlayerError(error) {
+    console.error('Error code', error.code, 'object', error);
+    alert('Error loading video: ' + error.message);
+}
+function onUIErrorEvent(errorEvent) {
+    onPlayerError(errorEvent.detail);
+}
+function initFailed(errorEvent) {
+    console.error('Unable to load the UI library!', errorEvent);
+}
 
-    // Pause button functionality
-    window.pauseVideo = function () {
-        video.pause();
-    };
-
-    // Restart button functionality
-    window.restartVideo = function () {
-        video.currentTime = 0;
-        video.play();
-    };
-
-    // Load video functionality
-    window.loadVideo = function () {
-        const manifestUrl = document.getElementById('manifestUrl').value.trim();
-        const keysInput = document.getElementById('keys').value.trim();
-        const proxyInput = document.getElementById('proxy').value.trim();
-        const headersInput = document.getElementById('headers').value.trim();
-
-        if (!manifestUrl) {
-            alert('Please enter a valid Manifest URL.');
-            return;
+async function loadVideo() {
+    const manifestUri = document.getElementById('manifestUrl').value.trim();
+    const keysValue = document.getElementById('keys').value.trim();
+    let clearKeys = {};
+    if (keysValue && keysValue.includes(':')) {
+        const [keyId, key] = keysValue.split(':').map(s => s.trim());
+        if (keyId && key) {
+            clearKeys[keyId] = key;
         }
-
-        const clearKeys = {};
-        if (keysInput) {
-            keysInput.split('\n').forEach(line => {
-                const [kid, key] = line.split(':').map(item => item.trim());
-                if (kid && key) clearKeys[kid] = key;
+    }
+    const proxyUrl = document.getElementById('proxy').value.trim();
+    const headersText = document.getElementById('headers').value.trim();
+    let headers = {};
+    if (headersText) {
+        try {
+            headers = JSON.parse(headersText);
+        } catch (e) {
+            headersText.split('\n').forEach(line => {
+                const [headerKey, headerValue] = line.split(':').map(s => s.trim());
+                if (headerKey && headerValue) headers[headerKey] = headerValue;
             });
         }
+    }
 
-        let customHeaders = {};
-        try {
-            if (headersInput) {
-                customHeaders = JSON.parse(headersInput);
+    const video = document.getElementById('video');
+    const ui = video['ui'];
+    const controls = ui.getControls();
+    const player = controls.getPlayer();
+    window.player = player;
+    window.ui = ui;
+
+    player.setTextTrackVisibility(true);
+
+    player.configure({
+        drm: {
+            clearKeys: clearKeys,
+        },
+        preferredTextLanguage: 'ms',
+        abr: {
+            defaultBandwidthEstimate: 7578,
+            enabled: true,
+            restrictions: {
+                minHeight: 359,
+                maxHeight: 1080
             }
-        } catch (error) {
-            alert('Invalid JSON format for headers.');
-            return;
+        },
+    });
+
+    player.getNetworkingEngine().registerRequestFilter(function (type, request) {
+        if (type === shaka.net.NetworkingEngine.RequestType.MANIFEST) {
+            if (proxyUrl) {
+                request.uris = [proxyUrl + encodeURIComponent(request.uris[0])];
+            }
+            Object.entries(headers).forEach(([headerKey, headerValue]) => {
+                request.headers[headerKey] = headerValue;
+            });
         }
+    });
 
-        let proxyConfig = {};
-        if (proxyInput) {
-            const proxyRegex = /^(http|https):\/\/(([^:]+):([^@]+)@)?([^:]+):(\d+)$/;
-            const match = proxyRegex.exec(proxyInput);
+    player.addEventListener('error', onPlayerErrorEvent);
+    controls.addEventListener('error', onUIErrorEvent);
 
-            if (match) {
-                const [_, protocol, username, password, host, port] = match;
-                proxyConfig = {
-                    protocol,
-                    host,
-                    port
-                };
+    try {
+        await player.load(manifestUri);
+        console.log('The video has now been loaded!');
+    } catch (error) {
+        onPlayerError(error);
+    }
+}
 
-                if (username && password) {
-                    const authHeader = btoa(`${username}:${password}`);
-                    customHeaders["Proxy-Authorization"] = `Basic ${authHeader}`;
-                }
-            } else {
-                alert('Invalid proxy format. Use http://ip:port or http://username:password@ip:port');
-                return;
-            }
-        }
-
-        player.configure({
-            drm: { clearKeys: clearKeys },
-            streaming: {
-                retryParameters: { maxAttempts: 3 },
-                customHeaders: customHeaders
-            },
-            networking: {
-                proxyConfig: proxyConfig
-            }
-        });
-
-        player.load(manifestUrl).then(() => {
-            console.log('Video loaded successfully.');
-            video.play();
-        }).catch(error => {
-            console.error('Error loading video:', error);
-            alert('Failed to load video. Check the Manifest URL, DRM configuration, proxy, or headers.');
-        });
-    };
-});
+function playVideo() {
+    document.getElementById('video').play();
+}
+function pauseVideo() {
+    document.getElementById('video').pause();
+}
+function restartVideo() {
+    const video = document.getElementById('video');
+    video.currentTime = 0;
+    video.play();
+}
